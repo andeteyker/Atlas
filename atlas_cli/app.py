@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Footer, Input, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static
 
 BASE_DIR = Path(__file__).resolve().parent
 COMMANDS_FILE = BASE_DIR / "commands.yaml"
@@ -232,64 +232,144 @@ ListItem.--highlight {
     height: 1;
 }
 
-/* ── Detail-Leiste ──────────────────────────────────────────────────────── */
-#detail {
-    height: 4;
+/* ── Chat-Leiste (integriert, immer sichtbar) ───────────────────────────── */
+#chat-area {
+    height: 8;
     background: #050a15;
-    border-top: solid #0d2a4a;
-    padding: 0 3;
+    border-top: solid #0d3060;
 }
 
-#detail-name {
-    color: #00ccff;
-    text-style: bold;
-    height: 1;
-    padding-top: 1;
-}
-
-#detail-cmd {
-    color: #0d6080;
-    height: 1;
-}
-
-#detail-desc {
-    color: #3a7a9c;
-    height: 1;
-}
-
-/* ── Prompt-Overlay ─────────────────────────────────────────────────────── */
-#prompt-overlay {
-    height: 3;
+#chat-log {
+    height: 5;
     background: #050a15;
-    border-top: solid #00ccff;
     padding: 0 3;
+    border: none;
+    scrollbar-color: #0d3060;
+    scrollbar-background: #050a15;
+    scrollbar-size: 1 1;
+}
+
+#slash-popup {
+    height: auto;
+    max-height: 6;
+    background: #0a1a2e;
+    border: round #0d3060;
+    margin: 0 3;
     display: none;
     layer: overlay;
 }
 
-#prompt-overlay.visible {
+#slash-popup.visible {
     display: block;
 }
 
-#prompt-label {
-    color: #0099bb;
-    height: 1;
-    padding-top: 1;
+#slash-popup ListView {
+    background: #0a1a2e;
+    border: none;
+    margin: 0;
+    height: auto;
 }
 
-#prompt-input {
-    background: #0a1a2a;
+#slash-popup ListItem {
+    height: 1;
+    padding: 0 1;
+    background: #0a1a2e;
+    color: #5aaad0;
+}
+
+#slash-popup ListItem.--highlight {
+    background: #0d3060;
     color: #00e5ff;
-    border: solid #0d3060;
-    height: 1;
 }
 
-#prompt-input:focus {
+#chat-input-row {
+    height: 3;
+    background: #050a15;
+    border-top: solid #0a2030;
+    padding: 0 2;
+    align: left middle;
+}
+
+#chat-agent-badge {
+    color: #00ccff;
+    background: #0d2240;
+    border: solid #0d3060;
+    width: auto;
+    padding: 0 2;
+    content-align: left middle;
+}
+
+#chat-input {
+    width: 1fr;
+    background: #0a1a2a;
+    color: #c8e8ff;
+    border: solid #0d3060;
+    margin: 0 1;
+}
+
+#chat-input:focus {
     border: solid #00ccff;
+}
+
+#chat-send-hint {
+    color: #0d3a50;
+    width: auto;
+    padding: 0 1;
+    content-align: right middle;
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */
 #footer-bar {
+    background: #050a15;
+    color: #0d5070;
+    height: 1;
+    border-top: solid #0a2030;
+    padding: 0 3;
+    content-align: left middle;
+}
+
+#chat-log {
+    height: 1fr;
+    background: #080d1a;
+    padding: 1 3;
+    scrollbar-color: #0d3060;
+    scrollbar-background: #080d1a;
+    border: none;
+}
+
+#chat-input-row {
+    height: 3;
+    background: #050a15;
+    border-top: solid #0d2a4a;
+    padding: 0 2;
+    align: left middle;
+}
+
+#chat-prompt-icon {
+    color: #0099bb;
+    width: 4;
+    content-align: left middle;
+}
+
+#chat-input {
+    width: 1fr;
+    background: #0a1a2a;
+    color: #c8e8ff;
+    border: solid #0d3060;
+}
+
+#chat-input:focus {
+    border: solid #00ccff;
+}
+
+#chat-status {
+    color: #1a5060;
+    width: 12;
+    content-align: right middle;
+    padding: 0 1;
+}
+
+#chat-footer-bar {
     background: #050a15;
     color: #0d5070;
     height: 1;
@@ -357,14 +437,26 @@ class AtlasLauncher(App[Optional[tuple[Command, str]]]):
         Binding("q", "quit_app", "Quit", show=True),
         Binding("e", "edit_config", "Edit Config", show=True),
         Binding("r", "reload", "Reload", show=True),
-        Binding("escape", "cancel_prompt", "Abbrechen", show=False),
+        Binding("tab", "focus_chat", "Chat", show=True),
+        Binding("escape", "focus_list", "Liste", show=False),
     ]
 
-    # Flache Liste aller Commands für Navigation
     _all_commands: list[Command] = []
     _selected_idx: reactive[int] = reactive(0)
-    _prompt_active: reactive[bool] = reactive(False)
-    _pending_command: Optional[Command] = None
+    _current_agent: str = "auto"
+
+    # Verfügbare Slash-Commands
+    SLASH_COMMANDS: list[tuple[str, str]] = [
+        ("/run",    "Task im Schwarm ausführen"),
+        ("/init",   "Schwarm für Domäne initialisieren"),
+        ("/status", "Schwarm-Status anzeigen"),
+        ("/spawn",  "Neuen Agenten hinzufügen"),
+        ("/learn",  "Erkenntnisse anzeigen"),
+        ("/history","Letzte Läufe anzeigen"),
+        ("/agent",  "Agent wechseln  z.B. /agent plm_coordinator"),
+        ("/clear",  "Chat-Log leeren"),
+        ("/help",   "Alle Befehle anzeigen"),
+    ]
 
     def __init__(self):
         super().__init__()
@@ -374,11 +466,7 @@ class AtlasLauncher(App[Optional[tuple[Command, str]]]):
 
     def _reload_commands(self):
         self._categories = load_commands()
-        self._all_commands = [
-            cmd
-            for cat in self._categories
-            for cmd in cat.commands
-        ]
+        self._all_commands = [cmd for cat in self._categories for cmd in cat.commands]
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -394,122 +482,220 @@ class AtlasLauncher(App[Optional[tuple[Command, str]]]):
         # Body — Command-Listen
         with Container(id="body"):
             for cat in self._categories:
-                yield Label(
-                    f"  {cat.icon}  {cat.name}",
-                    classes="cat-header",
-                )
-                lv = ListView(id=f"lv-{_safe_id(cat.name)}")
-                if not cat.commands:
-                    lv = ListView(id=f"lv-{_safe_id(cat.name)}")
-                    self._list_views.append(lv)
-                    with lv:
-                        yield ListItem(
-                            Label("  (keine Commands — commands.yaml bearbeiten)", classes="empty-cat")
-                        )
-                else:
-                    self._list_views.append(lv)
-                    with lv:
+                yield Label(f"  {cat.icon}  {cat.name}", classes="cat-header")
+                lv_id = f"lv-{_safe_id(cat.name)}"
+                lv = ListView(id=lv_id)
+                self._list_views.append(lv)
+                with lv:
+                    if not cat.commands:
+                        yield ListItem(Label(
+                            "  (keine Commands — E drücken zum Bearbeiten)",
+                            classes="empty-cat",
+                        ))
+                    else:
                         for cmd in cat.commands:
                             yield CommandItem(cmd)
 
-        # Detail-Leiste
-        with Container(id="detail"):
-            yield Label("", id="detail-name")
-            yield Label("", id="detail-cmd")
-            yield Label("", id="detail-desc")
+        # Slash-Command Popup (über der Chat-Leiste, standardmäßig versteckt)
+        with Container(id="slash-popup"):
+            yield ListView(id="slash-list")
 
-        # Prompt-Overlay (für Commands mit prompt: true)
-        with Container(id="prompt-overlay"):
-            yield Label("", id="prompt-label")
-            yield Input(placeholder="", id="prompt-input")
+        # Chat-Leiste — immer unten sichtbar
+        with Container(id="chat-area"):
+            yield RichLog(id="chat-log", markup=True, highlight=False, auto_scroll=True)
+            with Horizontal(id="chat-input-row"):
+                yield Label(f" {self._current_agent} ", id="chat-agent-badge")
+                yield Input(placeholder="Nachricht oder /befehl …", id="chat-input")
+                yield Label("Tab=Fokus  Esc=Liste", id="chat-send-hint")
 
         # Footer
         yield Label(
-            "  ↑↓ Navigate   Enter Launch   E Edit Config   R Reload   Q Quit",
+            "  ↑↓ Navigate   Enter Launch   Tab Chat   /befehl   E Config   Q Quit",
             id="footer-bar",
         )
 
     def on_mount(self) -> None:
-        self._update_detail()
+        # Slash-Popup mit allen Commands füllen
+        sl = self.query_one("#slash-list", ListView)
+        for cmd, desc in self.SLASH_COMMANDS:
+            sl.append(ListItem(Label(f"  {cmd:<12} {desc}")))
+
+        self._chat_sys(
+            "◈ ATLAS bereit. [dim]Tippe[/dim] [cyan]/help[/cyan] [dim]für Befehle "
+            "oder wähle oben ein Tool.[/dim]"
+        )
         if self._list_views:
             self._list_views[0].focus()
 
-    # ── Navigation & Events ───────────────────────────────────────────────────
+    # ── Chat-Hilfsfunktionen ──────────────────────────────────────────────────
 
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.item and isinstance(event.item, CommandItem):
-            cmd = event.item.command
-            idx = self._all_commands.index(cmd) if cmd in self._all_commands else -1
-            if idx >= 0:
-                self._selected_idx = idx
-                self._update_detail()
+    def _chat_sys(self, msg: str) -> None:
+        self.query_one("#chat-log", RichLog).write(msg)
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.item and isinstance(event.item, CommandItem):
-            self._launch_or_prompt(event.item.command)
-
-    def _launch_or_prompt(self, cmd: Command) -> None:
-        if not cmd.is_available:
-            self._set_detail(
-                f"✗  {cmd.name}",
-                f"  Nicht installiert: '{cmd.cmd}' nicht im PATH",
-                "  Installiere das Tool und starte den Launcher neu.",
-            )
-            return
-
-        if cmd.prompt:
-            self._pending_command = cmd
-            self._show_prompt(cmd)
-        else:
-            self.exit((cmd, ""))
-
-    def _show_prompt(self, cmd: Command) -> None:
-        overlay = self.query_one("#prompt-overlay")
-        label = self.query_one("#prompt-label", Label)
-        inp = self.query_one("#prompt-input", Input)
-        label.update(f"  ⌨  {cmd.prompt_label}:")
-        inp.value = ""
-        overlay.add_class("visible")
-        inp.focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "prompt-input" and self._pending_command:
-            extra = event.value.strip()
-            cmd = self._pending_command
-            self._pending_command = None
-            self._hide_prompt()
-            self.exit((cmd, extra))
-
-    def action_cancel_prompt(self) -> None:
-        if self._pending_command:
-            self._pending_command = None
-            self._hide_prompt()
-            if self._list_views:
-                self._list_views[0].focus()
-
-    def _hide_prompt(self) -> None:
-        self.query_one("#prompt-overlay").remove_class("visible")
-
-    # ── Detail-Leiste ─────────────────────────────────────────────────────────
-
-    def _update_detail(self) -> None:
-        if not self._all_commands or self._selected_idx < 0:
-            return
-        idx = min(self._selected_idx, len(self._all_commands) - 1)
-        cmd = self._all_commands[idx]
-        avail_str = "" if cmd.is_available else "  [nicht installiert]"
-        self._set_detail(
-            f"  {cmd.icon}  {cmd.name}{avail_str}",
-            f"  $ {cmd.full_cmd}",
-            f"  {cmd.description}",
+    def _chat_user(self, msg: str) -> None:
+        self.query_one("#chat-log", RichLog).write(
+            f"[bold cyan]  Du[/bold cyan]  [dim]({self._current_agent})[/dim]  {msg}"
         )
 
-    def _set_detail(self, name: str, cmd_str: str, desc: str) -> None:
-        self.query_one("#detail-name", Label).update(name)
-        self.query_one("#detail-cmd", Label).update(cmd_str)
-        self.query_one("#detail-desc", Label).update(desc)
+    def _chat_agent(self, agent: str, msg: str) -> None:
+        self.query_one("#chat-log", RichLog).write(
+            f"[bold]  {agent}[/bold]  {msg}"
+        )
+
+    def _chat_err(self, msg: str) -> None:
+        self.query_one("#chat-log", RichLog).write(f"[red]  ✗[/red]  {msg}")
+
+    # ── Input-Events ──────────────────────────────────────────────────────────
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "chat-input":
+            return
+        text = event.value
+        popup = self.query_one("#slash-popup")
+        if text.startswith("/") and len(text) <= 12:
+            # Passende Slash-Commands filtern
+            matches = [
+                (c, d) for c, d in self.SLASH_COMMANDS
+                if c.startswith(text)
+            ]
+            sl = self.query_one("#slash-list", ListView)
+            sl.clear()
+            for cmd, desc in matches:
+                sl.append(ListItem(Label(f"  {cmd:<12} {desc}")))
+            if matches:
+                popup.add_class("visible")
+                return
+        popup.remove_class("visible")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "chat-input":
+            return
+        text = event.value.strip()
+        event.input.value = ""
+        self.query_one("#slash-popup").remove_class("visible")
+        if not text:
+            return
+        if text.startswith("/"):
+            self._handle_slash(text)
+        else:
+            self._handle_chat(text)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Slash-Popup Auswahl
+        if event.list_view.id == "slash-list":
+            lbl = event.item.query_one(Label)
+            cmd = str(lbl.renderable).strip().split()[0]
+            inp = self.query_one("#chat-input", Input)
+            inp.value = cmd + " "
+            self.query_one("#slash-popup").remove_class("visible")
+            inp.focus()
+            return
+        # Launcher-Liste
+        if event.item and isinstance(event.item, CommandItem):
+            cmd = event.item.command
+            if not cmd.is_available:
+                self._chat_err(f"'{cmd.cmd}' nicht installiert / nicht im PATH")
+                return
+            if cmd.prompt:
+                inp = self.query_one("#chat-input", Input)
+                inp.placeholder = cmd.prompt_label + " …"
+                inp.value = ""
+                inp.focus()
+                self._pending_launch = cmd
+            else:
+                self.exit((cmd, ""))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id == "slash-list":
+            return
+        if event.item and isinstance(event.item, CommandItem):
+            cmd = event.item.command
+            avail = "" if cmd.is_available else "  [dim red](nicht installiert)[/dim red]"
+            self._chat_sys(
+                f"[dim cyan]  {cmd.icon}  {cmd.name}[/dim cyan]{avail}"
+                f"  [dim]{cmd.description[:60]}[/dim]"
+            )
+
+    # ── Slash-Command Handler ─────────────────────────────────────────────────
+
+    _pending_launch: Optional[Command] = None
+
+    def _handle_slash(self, text: str) -> None:
+        parts = text.split(None, 1)
+        cmd = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "/help":
+            self._chat_sys("[bold cyan]  Verfügbare Befehle:[/bold cyan]")
+            for c, d in self.SLASH_COMMANDS:
+                self._chat_sys(f"  [cyan]{c:<14}[/cyan][dim]{d}[/dim]")
+
+        elif cmd == "/clear":
+            self.query_one("#chat-log", RichLog).clear()
+            self._chat_sys("◈ Chat geleert.")
+
+        elif cmd == "/agent":
+            if arg:
+                self._current_agent = arg
+                self.query_one("#chat-agent-badge", Label).update(f" {arg} ")
+                self._chat_sys(f"[cyan]  Agent → {arg}[/cyan]")
+            else:
+                self._chat_sys(f"  Aktueller Agent: [cyan]{self._current_agent}[/cyan]")
+
+        elif cmd in ("/status", "/learn", "/history"):
+            atlas_cmd = cmd.lstrip("/")
+            self._chat_sys(f"[dim]  Starte atlas {atlas_cmd} …[/dim]")
+            self.exit((Command(
+                name=atlas_cmd, cmd="python",
+                args=["-m", "atlas_run.atlas", atlas_cmd],
+                description="",
+            ), ""))
+
+        elif cmd in ("/run", "/init", "/spawn"):
+            atlas_cmd = cmd.lstrip("/")
+            if arg:
+                self.exit((Command(
+                    name=atlas_cmd, cmd="python",
+                    args=["-m", "atlas_run.atlas", atlas_cmd],
+                    description="",
+                ), arg))
+            else:
+                self._chat_sys(
+                    f"[yellow]  Verwendung:[/yellow] [cyan]{cmd}[/cyan] <{atlas_cmd}-argument>"
+                )
+
+        else:
+            self._chat_err(f"Unbekannter Befehl: {text}  →  /help für Übersicht")
+
+    def _handle_chat(self, text: str) -> None:
+        # Wenn ein Launcher-Prompt aktiv war → als Argument benutzen
+        if self._pending_launch:
+            cmd = self._pending_launch
+            self._pending_launch = None
+            inp = self.query_one("#chat-input", Input)
+            inp.placeholder = "Nachricht oder /befehl …"
+            self.exit((cmd, text))
+            return
+        # Normaler Chat → direkt als /run weiterleiten
+        self._chat_user(text)
+        self._chat_sys(
+            f"[dim]  → Sende an Schwarm als[/dim] [cyan]/run {text[:40]}[/cyan][dim] …[/dim]"
+        )
+        self.exit((Command(
+            name="run", cmd="python",
+            args=["-m", "atlas_run.atlas", "run"],
+            description="",
+        ), text))
 
     # ── Actions ───────────────────────────────────────────────────────────────
+
+    def action_focus_chat(self) -> None:
+        self.query_one("#chat-input", Input).focus()
+
+    def action_focus_list(self) -> None:
+        self.query_one("#slash-popup").remove_class("visible")
+        if self._list_views:
+            self._list_views[0].focus()
 
     def action_quit_app(self) -> None:
         self.exit(None)
@@ -520,7 +706,6 @@ class AtlasLauncher(App[Optional[tuple[Command, str]]]):
     def action_reload(self) -> None:
         self._reload_commands()
         self.refresh(recompose=True)
-        self._update_detail()
 
 
 def _safe_id(name: str) -> str:
