@@ -19,6 +19,8 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static
 
+from atlas_cli.network_widget import AgentNetwork
+
 BASE_DIR = Path(__file__).resolve().parent
 COMMANDS_FILE = BASE_DIR / "commands.yaml"
 
@@ -135,8 +137,13 @@ Screen {
 /* ── Body ───────────────────────────────────────────────────────────────── */
 #body {
     height: 1fr;
+}
+
+#command-lists {
+    height: 1fr;
+    width: 1fr;
     overflow-y: auto;
-    padding: 0 2;
+    padding: 0 1;
 }
 
 /* ── Kategorie ──────────────────────────────────────────────────────────── */
@@ -479,22 +486,24 @@ class AtlasLauncher(App[Optional[tuple[Command, str]]]):
             yield Label("Agent Command Interface", id="subtitle")
             yield Label("─" * 52, id="divider")
 
-        # Body — Command-Listen
-        with Container(id="body"):
-            for cat in self._categories:
-                yield Label(f"  {cat.icon}  {cat.name}", classes="cat-header")
-                lv_id = f"lv-{_safe_id(cat.name)}"
-                lv = ListView(id=lv_id)
-                self._list_views.append(lv)
-                with lv:
-                    if not cat.commands:
-                        yield ListItem(Label(
-                            "  (keine Commands — E drücken zum Bearbeiten)",
-                            classes="empty-cat",
-                        ))
-                    else:
-                        for cmd in cat.commands:
-                            yield CommandItem(cmd)
+        # Body — Netzwerk-Visualisierung + Command-Listen
+        with Horizontal(id="body"):
+            yield AgentNetwork(id="network")
+            with Vertical(id="command-lists"):
+                for cat in self._categories:
+                    yield Label(f"  {cat.icon}  {cat.name}", classes="cat-header")
+                    lv_id = f"lv-{_safe_id(cat.name)}"
+                    lv = ListView(id=lv_id)
+                    self._list_views.append(lv)
+                    with lv:
+                        if not cat.commands:
+                            yield ListItem(Label(
+                                "  (keine Commands — E drücken zum Bearbeiten)",
+                                classes="empty-cat",
+                            ))
+                        else:
+                            for cmd in cat.commands:
+                                yield CommandItem(cmd)
 
         # Slash-Command Popup (über der Chat-Leiste, standardmäßig versteckt)
         with Container(id="slash-popup"):
