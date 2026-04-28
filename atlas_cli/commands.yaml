@@ -1,0 +1,102 @@
+# ATLAS CLI — Command Launcher Konfiguration
+# Passe diese Datei an um eigene Commands, Agenten und Tools hinzuzufügen.
+#
+# Felder pro Command:
+#   name        — Anzeigename im Launcher
+#   cmd         — Ausführbarer Befehl (muss im PATH sein)
+#   args        — Feste Argumente (Liste)
+#   description — Kurzbeschreibung (wird in der Detailleiste angezeigt)
+#   icon        — Unicode-Symbol (optional)
+#   prompt      — true = Launcher fragt nach Input bevor der Command startet
+#   prompt_label — Label für den Input-Prompt
+#   env         — Zusätzliche Umgebungsvariablen (dict, optional)
+
+categories:
+
+  - name: "AI Code Agents"
+    icon: "◈"
+    commands:
+      - name: "Claude Code"
+        cmd: "claude"
+        args: []
+        description: "Anthropic's official Claude CLI — interactive coding agent"
+        icon: "◉"
+
+      - name: "Codex CLI"
+        cmd: "codex"
+        args: []
+        description: "OpenAI Codex CLI — AI-powered code generation"
+        icon: "◉"
+
+      - name: "OpenCode"
+        cmd: "opencode"
+        args: []
+        description: "Open-source AI coding assistant (terminal)"
+        icon: "◉"
+
+      - name: "Aider"
+        cmd: "aider"
+        args: []
+        description: "AI pair programming in your terminal"
+        icon: "◉"
+
+  - name: "ATLAS Swarm"
+    icon: "⬡"
+    commands:
+      - name: "ATLAS Chat"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "chat"]
+        description: "Interaktiver Multi-Turn Chat mit dem ATLAS-Schwarm"
+        icon: "◎"
+
+      - name: "ATLAS Run"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "run"]
+        description: "Task direkt im Schwarm ausführen"
+        icon: "◎"
+        prompt: true
+        prompt_label: "Task eingeben"
+
+      - name: "ATLAS Init"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "init"]
+        description: "Neuen Schwarm für eine Domäne initialisieren"
+        icon: "◎"
+        prompt: true
+        prompt_label: "Domäne / Thema eingeben"
+
+      - name: "ATLAS Status"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "status"]
+        description: "Schwarm-Status anzeigen (Agenten, Blackboard, Lernpool)"
+        icon: "◎"
+
+      - name: "ATLAS Spawn"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "spawn"]
+        description: "Einzelnen Agenten manuell zum Schwarm hinzufügen"
+        icon: "◎"
+        prompt: true
+        prompt_label: "atlas spawn <name> --desc \"...\" [--auto]"
+
+      - name: "ATLAS Learn"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "learn"]
+        description: "Globale Schwarm-Erkenntnisse anzeigen"
+        icon: "◎"
+
+      - name: "ATLAS History"
+        cmd: "python"
+        args: ["-m", "atlas_run.atlas", "history"]
+        description: "Vergangene Läufe anzeigen"
+        icon: "◎"
+
+  - name: "Custom Commands"
+    icon: "✦"
+    commands: []
+    # Beispiel:
+    # - name: "Mein Tool"
+    #   cmd: "my-tool"
+    #   args: ["--flag"]
+    #   description: "Kurzbeschreibung"
+    #   icon: "⬢"

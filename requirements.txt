@@ -8,6 +8,7 @@ pyyaml>=6.0
 # CLI & UI
 rich>=13.7.0
 typer>=0.12.0
+textual>=0.60.0   # ATLAS CLI TUI Launcher
 
 # Data Validation
 pydantic>=2.0.0
