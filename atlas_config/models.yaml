@@ -1,16 +1,47 @@
+# ATLAS Modell-Konfiguration
+# Alle Modelle werden via OpenRouter aufgerufen.
+# Dokumentation: https://openrouter.ai/models
+
+# Standard-Modell (wird verwendet wenn kein Agent-spezifisches Modell konfiguriert)
 default: minimax/minimax-m2.5
 
+# Empfohlene Alternativen (in Kommentaren):
+# default: anthropic/claude-3-haiku          # Schnell, günstig
+# default: anthropic/claude-3.5-sonnet       # Beste Qualität
+# default: google/gemini-flash-1.5           # Schnell + multimodal
+# default: mistralai/mistral-7b-instruct     # Lokal hosbar
+# default: meta-llama/llama-3.1-8b-instruct  # Open-Source
+
+# Modell pro Agent (überschreibt default)
 agents:
   plm_coordinator: minimax/minimax-m2.5
   sr_writer: minimax/minimax-m2.5
   automation_engineer: minimax/minimax-m2.5
   demand_writer: minimax/minimax-m2.5
   daily_briefing: minimax/minimax-m2.5
+  # Interne System-Agenten — klein und schnell
+  router: minimax/minimax-m2.5
   spawner: minimax/minimax-m2.5
   learner: minimax/minimax-m2.5
 
+# Temperatur pro Agent
+# Niedrig (0.0-0.2): Deterministisch, gut für strukturierte Outputs
+# Mittel (0.3-0.5): Ausgewogen
+# Hoch (0.6-1.0): Kreativ, gut für freie Texte
 temperature:
-  default: 0.2
-  router: 0.0
-  spawner: 0.3
-  learner: 0.1
+  default: 0.3
+  router: 0.0        # Routing muss deterministisch sein
+  learner: 0.1       # Regelextraktion = präzise
+  spawner: 0.4       # Agent-Generierung darf kreativ sein
+  sr_writer: 0.2     # SR-Format = strukturiert
+  demand_writer: 0.4 # Management-Texte = professionell aber variabel
+  daily_briefing: 0.3
+
+# Max. Token pro Agent
+max_tokens:
+  default: 4096
+  demand_writer: 6000  # Business Cases können lang sein
+  automation_engineer: 6000  # Code-Output
+  learner: 512    # Nur eine kurze Regel
+  router: 64      # Nur den Agentennamen
+  spawner: 2048
