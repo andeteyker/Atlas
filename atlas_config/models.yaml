@@ -12,36 +12,30 @@ default: minimax/minimax-m2.5
 # default: mistralai/mistral-7b-instruct     # Lokal hosbar
 # default: meta-llama/llama-3.1-8b-instruct  # Open-Source
 
-# Modell pro Agent (überschreibt default)
+# Modell pro interne System-Agenten (überschreibt default)
+# Domänen-Agenten erben das default-Modell automatisch
 agents:
-  plm_coordinator: minimax/minimax-m2.5
-  sr_writer: minimax/minimax-m2.5
-  automation_engineer: minimax/minimax-m2.5
-  demand_writer: minimax/minimax-m2.5
-  daily_briefing: minimax/minimax-m2.5
-  # Interne System-Agenten — klein und schnell
+  # Interne System-Agenten
   router: minimax/minimax-m2.5
   spawner: minimax/minimax-m2.5
   learner: minimax/minimax-m2.5
+  bootstrap: minimax/minimax-m2.5   # Swarm-Architekt: analysiert Domain + entwirft Team
 
-# Temperatur pro Agent
-# Niedrig (0.0-0.2): Deterministisch, gut für strukturierte Outputs
-# Mittel (0.3-0.5): Ausgewogen
-# Hoch (0.6-1.0): Kreativ, gut für freie Texte
+# Temperatur pro Agent-Typ
+# Niedrig (0.0-0.2): Deterministisch — für strukturierte Outputs und Routing
+# Mittel (0.3-0.5): Ausgewogen — Standard für die meisten Agenten
+# Hoch (0.6-1.0): Kreativ — für Ideenfindung, Generierung, Entwurf
 temperature:
   default: 0.3
-  router: 0.0        # Routing muss deterministisch sein
-  learner: 0.1       # Regelextraktion = präzise
-  spawner: 0.4       # Agent-Generierung darf kreativ sein
-  sr_writer: 0.2     # SR-Format = strukturiert
-  demand_writer: 0.4 # Management-Texte = professionell aber variabel
-  daily_briefing: 0.3
+  router: 0.0        # Deterministisch — nur Agentennamen ausgeben
+  learner: 0.1       # Präzise — Regelextraktion
+  spawner: 0.5       # Kreativ — Agent-Persönlichkeiten generieren
+  bootstrap: 0.7     # Sehr kreativ — Team-Entwurf soll variieren
 
-# Max. Token pro Agent
+# Max. Token pro Agent-Typ
 max_tokens:
   default: 4096
-  demand_writer: 6000  # Business Cases können lang sein
-  automation_engineer: 6000  # Code-Output
-  learner: 512    # Nur eine kurze Regel
-  router: 64      # Nur den Agentennamen
-  spawner: 2048
+  bootstrap: 2048    # JSON-Array mit 3-6 Agent-Specs
+  spawner: 3000      # 4 Dateien generieren
+  learner: 512       # Nur eine kurze Regel
+  router: 64         # Nur den Agentennamen

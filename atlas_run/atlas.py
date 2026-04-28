@@ -1,31 +1,29 @@
 """
 ATLAS Swarm CLI — Haupteinstiegspunkt.
 
-Verbesserungen:
-- `run`: Live-Streaming mit Rich Markdown-Rendering
-- `chat`: Interaktiver Multi-Turn Chat-Modus
-- `history`: Letzte Läufe anzeigen und durchsuchen
-- `tools`: Tool-Status und verfügbare Werkzeuge
-- `vector`: Vector-Store Statistiken
-- Delegations werden inline angezeigt
-- Farbige Confidence-Anzeige
+Commands:
+  run    — Task ausführen (Bootstrap wenn Schwarm leer)
+  init   — Schwarm für eine Domäne initialisieren
+  chat   — Interaktiver Multi-Turn Chat
+  status — Schwarm-Status
+  spawn  — Einzelnen Agenten manuell hinzufügen
+  learn  — Globale Erkenntnisse anzeigen
+  history — Vergangene Läufe
+  tools  — Verfügbare Tools
+  vector — Vector-Store Statistiken
 """
 
 from __future__ import annotations
 
 import json
-import os
-import sys
 from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 from rich.prompt import Prompt
+from rich.table import Table
 
 from atlas_core.router import route_task, validate_input
 from atlas_core.runtime import run_agent
@@ -39,7 +37,7 @@ from atlas_core.spawner import process_spawn_requests, spawn_agent
 from atlas_core.schema import AgentResponse
 
 app = typer.Typer(
-    help="ATLAS Swarm — Dezentrales AIOS für PLM-Koordination und Schiffbau",
+    help="ATLAS Swarm — Domänen-agnostisches dezentrales AIOS",
     no_args_is_help=True,
 )
 console = Console()
@@ -59,7 +57,6 @@ def _confidence_color(c: float) -> str:
 
 
 def _show_response(response: AgentResponse, agent_name: str, streamed: bool = False):
-    """Zeigt eine AgentResponse schön formatiert an."""
     if not streamed:
         console.print(Panel(
             Markdown(response.output),
@@ -67,24 +64,45 @@ def _show_response(response: AgentResponse, agent_name: str, streamed: bool = Fa
             border_style="cyan",
         ))
 
-    # Confidence
     conf_color = _confidence_color(response.confidence)
-    console.print(
-        f"  Confidence: [{conf_color}]{response.confidence:.0%}[/{conf_color}]"
-        + (f"  |  Tags: {', '.join(response.tags[:5])}" if response.tags else "")
-    )
+    meta = f"  Confidence: [{conf_color}]{response.confidence:.0%}[/{conf_color}]"
+    if response.tags:
+        meta += f"  |  Tags: {', '.join(response.tags[:5])}"
+    console.print(meta)
 
-    # Delegationen
     if response.delegations:
-        console.print("\n[yellow]Delegation(en):[/yellow]")
+        console.print("\n[yellow]Delegationen:[/yellow]")
         for d in response.delegations:
             console.print(f"  → [cyan]{d.to_agent}[/cyan]: {d.task}")
 
-    # Wissenslücken
     if response.gaps:
         console.print("\n[red]Wissenslücken:[/red]")
         for g in response.gaps:
             console.print(f"  ⚠ {g.topic}" + (f": {g.reason}" if g.reason else ""))
+
+
+def _ensure_swarm(text: str, auto: bool = False) -> bool:
+    """
+    Prüft ob Agenten vorhanden sind.
+    Wenn nicht: Bootstrap-Flow starten.
+    Gibt True zurück wenn der Schwarm bereit ist.
+    """
+    from atlas_core.bootstrap import bootstrap_swarm
+
+    registry = load_agent_registry()
+    if registry:
+        return True
+
+    console.print(Panel.fit(
+        "[bold yellow]Der ATLAS-Schwarm ist leer.[/bold yellow]\n"
+        "[dim]Kein Agent ist registriert. Der Swarm-Architekt analysiert dein Thema\n"
+        "und erstellt automatisch ein passendes Agenten-Team.[/dim]",
+        border_style="yellow",
+    ))
+    console.print()
+
+    spawned = bootstrap_swarm(text, auto=auto)
+    return len(spawned) > 0
 
 
 def _run_task(
@@ -92,8 +110,8 @@ def _run_task(
     agent: str = "auto",
     no_learn: bool = False,
     process_queue: bool = True,
+    auto_bootstrap: bool = False,
 ) -> AgentResponse | None:
-    """Führt einen Task aus (wiederverwendbar für run und chat)."""
 
     if process_queue:
         process_delegations()
@@ -104,18 +122,33 @@ def _run_task(
         console.print(f"[red]Input ungültig:[/red] {error}")
         return None
 
-    # Agent wählen
+    # Agenten wählen — Bootstrap wenn leer
     if agent == "auto":
-        with console.status("[dim]Router wählt Agenten...[/dim]", spinner="dots"):
-            selected_agent, spawn_needed = route_task(text)
+        try:
+            with console.status("[dim]Router wählt Agenten...[/dim]", spinner="dots"):
+                selected_agent, spawn_needed = route_task(text)
+        except RuntimeError as e:
+            if "ATLAS_EMPTY_SWARM" in str(e):
+                if not _ensure_swarm(text, auto=auto_bootstrap):
+                    return None
+                # Nochmal versuchen nach Bootstrap
+                try:
+                    selected_agent, spawn_needed = route_task(text)
+                except RuntimeError:
+                    console.print("[red]Routing nach Bootstrap fehlgeschlagen.[/red]")
+                    return None
+            else:
+                console.print(f"[red]Router-Fehler:[/red] {e}")
+                return None
+
         if spawn_needed:
-            console.print("[yellow]⚡ Kein passender Agent — Spawn-Anfrage eingereiht.[/yellow]")
+            console.print("[yellow]⚡ Spawn-Anfrage eingereiht für neuen Agenten.[/yellow]")
     else:
         selected_agent = agent
 
     console.print(f"[dim]Agent: [cyan]{selected_agent}[/cyan][/dim]")
 
-    # Streaming-Output
+    # Streaming Output
     streamed_text: list[str] = []
     panel_started = False
 
@@ -131,21 +164,18 @@ def _run_task(
     try:
         response = run_agent(selected_agent, text, stream_callback=stream_cb)
     except Exception as e:
-        console.print(f"\n[red]Fehler beim Ausführen von '{selected_agent}':[/red] {e}")
+        console.print(f"\n[red]Fehler bei '{selected_agent}':[/red] {e}")
         return None
 
-    # Newline nach Streaming
     if streamed_text:
         console.print()
         console.rule(style="cyan dim")
 
     _show_response(response, selected_agent, streamed=bool(streamed_text))
 
-    # History
     saved = save_history(selected_agent, text, response.output)
     console.print(f"[dim]  ↳ {saved.name}[/dim]")
 
-    # Auto-Lernen
     if not no_learn:
         try:
             auto_learn(selected_agent, text, response.output)
@@ -160,23 +190,67 @@ def _run_task(
 @app.command()
 def run(
     text: str = typer.Argument(..., help="Dein Input für den Schwarm"),
-    agent: str = typer.Option("auto", "--agent", "-a", help="Agent: auto oder spezifischer Name"),
+    agent: str = typer.Option("auto", "--agent", "-a", help="Agent: auto oder Name"),
     no_learn: bool = typer.Option(False, "--no-learn", help="Kein automatisches Lernen"),
     no_queue: bool = typer.Option(False, "--no-queue", help="Delegations-Queue nicht verarbeiten"),
+    auto: bool = typer.Option(False, "--auto", help="Bootstrap ohne Bestätigung"),
 ):
-    """Führt einen Task im ATLAS-Schwarm aus (mit Live-Streaming)."""
-    _run_task(text, agent=agent, no_learn=no_learn, process_queue=not no_queue)
+    """
+    Führt einen Task im ATLAS-Schwarm aus.
+
+    Wenn noch kein Agent existiert, analysiert der Swarm-Architekt
+    dein Thema und erstellt automatisch ein passendes Agenten-Team.
+    """
+    _run_task(text, agent=agent, no_learn=no_learn, process_queue=not no_queue, auto_bootstrap=auto)
+
+
+@app.command()
+def init(
+    topic: str = typer.Argument(..., help="Domäne oder Thema für den Schwarm"),
+    auto: bool = typer.Option(False, "--auto", help="Ohne Bestätigung spawnen"),
+):
+    """
+    Initialisiert den Schwarm für eine neue Domäne.
+
+    Der Swarm-Architekt analysiert das Thema und erstellt ein
+    optimales Agenten-Team mit passenden Persönlichkeiten.
+
+    Beispiele:
+      atlas init "Software Engineering Team"
+      atlas init "E-Commerce Customer Support" --auto
+      atlas init "Medizinische Forschung und Literaturrecherche"
+    """
+    from atlas_core.bootstrap import bootstrap_swarm
+
+    registry = load_agent_registry()
+    if registry:
+        console.print(
+            f"[yellow]Der Schwarm hat bereits {len(registry)} Agenten.[/yellow]\n"
+            "[dim]Bestehende Agenten bleiben erhalten. Neue werden hinzugefügt.[/dim]"
+        )
+        console.print()
+
+    bootstrap_swarm(topic, auto=auto)
 
 
 @app.command()
 def chat(
     agent: str = typer.Option("auto", "--agent", "-a", help="Agent (auto = automatisch)"),
     no_learn: bool = typer.Option(False, "--no-learn", help="Kein automatisches Lernen"),
+    auto: bool = typer.Option(False, "--auto", help="Bootstrap ohne Bestätigung"),
 ):
-    """Interaktiver Multi-Turn Chat mit dem ATLAS-Schwarm (Ctrl+C zum Beenden)."""
+    """
+    Interaktiver Multi-Turn Chat mit dem ATLAS-Schwarm.
+
+    Sonderbefehle im Chat:
+      :agent <name>  — Agent wechseln
+      :status        — Schwarm-Status anzeigen
+      :agents        — Alle Agenten auflisten
+      exit           — Chat beenden
+    """
     console.print(Panel.fit(
         "[bold]ATLAS Swarm Chat[/bold]\n"
-        "[dim]Ctrl+C oder 'exit' zum Beenden | ':agent <name>' zum Wechseln | ':status' für Status[/dim]",
+        "[dim]Ctrl+C oder 'exit' zum Beenden | ':agent <name>' | ':status' | ':agents'[/dim]",
         border_style="cyan",
     ))
 
@@ -186,7 +260,7 @@ def chat(
     while True:
         try:
             user_input = Prompt.ask(
-                f"\n[bold green]Du[/bold green] [dim](Agent: {current_agent})[/dim]"
+                f"\n[bold green]Du[/bold green] [dim]({current_agent})[/dim]"
             ).strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Chat beendet.[/dim]")
@@ -194,13 +268,12 @@ def chat(
 
         if not user_input:
             continue
-        if user_input.lower() in ("exit", "quit", "bye", ":exit"):
+        if user_input.lower() in ("exit", "quit", ":exit", "bye"):
             console.print("[dim]Chat beendet.[/dim]")
             break
         if user_input.startswith(":agent "):
-            new_agent = user_input[7:].strip()
-            current_agent = new_agent
-            console.print(f"[yellow]Agent gewechselt zu: {current_agent}[/yellow]")
+            current_agent = user_input[7:].strip()
+            console.print(f"[yellow]Agent → {current_agent}[/yellow]")
             continue
         if user_input == ":status":
             _print_status()
@@ -214,7 +287,8 @@ def chat(
             user_input,
             agent=current_agent,
             no_learn=no_learn,
-            process_queue=(turn == 1),  # Queue nur beim ersten Turn verarbeiten
+            process_queue=(turn == 1),
+            auto_bootstrap=auto,
         )
 
 
@@ -226,43 +300,45 @@ def status():
 
 def _print_status():
     registry = load_agent_registry()
-    bb_stats = get_signal_stats()
 
-    # Agenten-Tabelle
+    if not registry:
+        console.print(Panel.fit(
+            "[yellow]Schwarm ist leer[/yellow]\n"
+            "[dim]Starte mit:[/dim]\n"
+            "  [cyan]atlas init \"Deine Domäne\"[/cyan]  — Team automatisch erstellen\n"
+            "  [cyan]atlas run \"Deine Frage\"[/cyan]    — Direkt starten (Bootstrap greift automatisch)",
+            border_style="yellow",
+            title="ATLAS Swarm",
+        ))
+        return
+
     table = Table(title="ATLAS Schwarm", show_header=True, header_style="bold cyan")
     table.add_column("Agent", style="cyan", min_width=20)
-    table.add_column("Skills", max_width=50)
+    table.add_column("Beschreibung", max_width=50)
     table.add_column("Status", justify="center")
 
     for name, info in registry.items():
         status_str = "[green]aktiv[/green]" if info.get("active") else "[red]inaktiv[/red]"
-        skills = ", ".join(info.get("skills", [])[:3])
-        table.add_row(name, skills, status_str)
+        desc = info.get("description", "")[:50]
+        table.add_row(name, desc, status_str)
 
     console.print(table)
 
-    # Blackboard-Stats
+    bb = get_signal_stats()
     console.print(
-        f"\n[bold]Blackboard:[/bold] "
-        f"{bb_stats['active']} aktive Signale | "
-        f"{bb_stats['consumed']} verbraucht | "
-        f"{bb_stats.get('expired', 0)} abgelaufen"
+        f"\n[bold]Blackboard:[/bold] {bb['active']} aktiv | {bb['consumed']} verbraucht"
     )
-    by_type = bb_stats.get("by_type", {})
-    if by_type:
-        type_str = " · ".join(f"{t}={n}" for t, n in by_type.items())
-        console.print(f"  Typen: [dim]{type_str}[/dim]")
-
-    # Lernpool
-    all_learnings = read_learnings(limit=9999)
-    console.print(f"[bold]Lernpool:[/bold] {len(all_learnings)} globale Erkenntnisse")
+    console.print(f"[bold]Lernpool:[/bold] {len(read_learnings(limit=9999))} Erkenntnisse")
 
 
 def _print_agents():
     registry = load_agent_registry()
+    if not registry:
+        console.print("[dim]Keine Agenten registriert.[/dim]")
+        return
     for name, info in registry.items():
         if info.get("active"):
-            console.print(f"  [cyan]{name}[/cyan]: {info.get('description', '')[:60]}")
+            console.print(f"  [cyan]{name}[/cyan]: {info.get('description', '')[:70]}")
 
 
 @app.command()
@@ -272,7 +348,12 @@ def spawn(
     skills: str = typer.Option("", "--skills", "-s", help="Komma-getrennte Skills"),
     auto: bool = typer.Option(False, "--auto", help="Ohne Bestätigung spawnen"),
 ):
-    """Spawnt einen neuen Agenten manuell."""
+    """
+    Fügt einen einzelnen Agenten manuell zum Schwarm hinzu.
+
+    Beispiel:
+      atlas spawn "code_reviewer" --desc "Überprüft Code auf Qualität und Bugs" --skills "Python,Code Review,Testing"
+    """
     skill_list = [s.strip() for s in skills.split(",") if s.strip()]
     spawn_agent(name=name, description=description, skills=skill_list, confirmed=auto)
 
@@ -299,10 +380,10 @@ def learn():
 
 @app.command()
 def history(
-    limit: int = typer.Option(10, "--limit", "-n", help="Anzahl anzuzeigender Einträge"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Anzahl Einträge"),
     agent: str = typer.Option("", "--agent", "-a", help="Filter nach Agent"),
 ):
-    """Zeigt vergangene Läufe aus der History."""
+    """Zeigt vergangene Läufe."""
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(HISTORY_DIR.glob("*.json"), reverse=True)
 
@@ -319,21 +400,22 @@ def history(
             continue
 
     if not entries:
-        console.print("[dim]Keine History-Einträge gefunden.[/dim]")
+        console.print("[dim]Keine History-Einträge.[/dim]")
         return
 
     table = Table(title="ATLAS History", show_header=True, header_style="bold")
     table.add_column("Zeit", style="dim", min_width=19)
     table.add_column("Agent", style="cyan", min_width=15)
-    table.add_column("Input", max_width=50)
-    table.add_column("Output (Vorschau)", max_width=60)
+    table.add_column("Input", max_width=45)
+    table.add_column("Output", max_width=55)
 
     for e in entries:
-        ts = e.get("timestamp", "")[:19]
-        ag = e.get("agent", "?")
-        inp = e.get("input", "")[:50]
-        out = e.get("output", "")[:60].replace("\n", " ")
-        table.add_row(ts, ag, inp, out)
+        table.add_row(
+            e.get("timestamp", "")[:19],
+            e.get("agent", "?"),
+            e.get("input", "")[:45],
+            e.get("output", "")[:55].replace("\n", " "),
+        )
 
     console.print(table)
 
@@ -348,21 +430,25 @@ def tools():
     table.add_column("Agenten")
 
     for name, info in TOOL_REGISTRY.items():
-        agents = ", ".join(info.get("agents", []))
-        table.add_row(name, info["description"], agents)
+        table.add_row(name, info["description"], ", ".join(info.get("agents", [])))
 
     console.print(table)
+    console.print(
+        "\n[dim]Tools werden automatisch für Agenten aktiviert die dem entsprechenden Agentennamen entsprechen.[/dim]"
+    )
 
 
 @app.command()
 def vector():
-    """Zeigt Vector-Store Statistiken."""
+    """Zeigt Vector-Store Statistiken (ChromaDB)."""
     from atlas_core import vector_memory as vm
     stats = vm.vector_stats()
 
     if not stats.get("available"):
-        console.print(f"[yellow]Vector Store nicht verfügbar:[/yellow] {stats.get('reason', 'chromadb fehlt')}")
-        console.print("[dim]Installieren: pip install chromadb[/dim]")
+        console.print(
+            f"[yellow]Vector Store nicht verfügbar:[/yellow] {stats.get('reason', 'chromadb fehlt')}\n"
+            "[dim]pip install chromadb[/dim]"
+        )
         return
 
     console.print(Panel.fit(

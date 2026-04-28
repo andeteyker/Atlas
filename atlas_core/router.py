@@ -1,11 +1,13 @@
 """
 ATLAS Swarm Dispatcher — wählt den passenden Agenten anhand des Skill-Index.
 
-Verbesserungen:
-- Zweistufiges Routing: zuerst Keyword-Match, dann LLM-Fallback
-- Skill-Index wird für schnelle Vorauswahl genutzt
-- Spawn-Request nur wenn wirklich kein Agent passt
-- Input-Validierung mit detaillierten Fehlermeldungen
+Zweistufiges Routing:
+  1. Keyword-Match (kein LLM-Call, schnell)
+  2. LLM-Fallback (wenn unklar)
+  3. Spawn-Request (wenn wirklich nichts passt)
+
+Wenn der Schwarm leer ist: RuntimeError("ATLAS_EMPTY_SWARM") —
+der Aufrufer (atlas.py) leitet dann zum Bootstrap-Flow weiter.
 """
 
 from __future__ import annotations
@@ -36,38 +38,23 @@ def validate_input(text: str) -> tuple[bool, str]:
 def _keyword_route(text: str, registry: dict) -> str | None:
     """
     Schnelles Keyword-Routing ohne LLM-Aufruf.
-    Gibt Agentennamen zurück wenn ein klarer Match gefunden, sonst None.
+    Baut Keywords dynamisch aus dem Skill-Index statt hardcoded-Listen.
+    Gibt Agentennamen zurück wenn klarer Match, sonst None.
     """
     text_lower = text.lower()
     scores: dict[str, int] = {}
 
-    keyword_map: dict[str, list[str]] = {
-        "sr_writer": [
-            "service request", "sr erstell", "bug report", "fehlermeldung",
-            "fehler melden", "ticket", "expected result", "actual result",
-            "workaround", "bug", "fehler in"
-        ],
-        "demand_writer": [
-            "it demand", "demand", "business case", "roi", "management",
-            "entscheidungsvorlage", "antrag", "investition", "nutzen"
-        ],
-        "automation_engineer": [
-            "python", "power automate", "vba", "autohotkey", "skript", "script",
-            "automatisier", "pipeline", "excel makro", "shell", "automatisch"
-        ],
-        "daily_briefing": [
-            "tagesplan", "briefing", "priorität", "heute", "morning",
-            "aufgaben heute", "was steht an", "tagesübersicht"
-        ],
-        "plm_coordinator": [
-            "catia", "enovia", "3dexperience", "3dx", "sap", "p&id",
-            "product structure", "jlm", "item-id", "plm", "attribute"
-        ],
-    }
-
-    for agent_name, keywords in keyword_map.items():
-        if agent_name not in registry or not registry[agent_name].get("active", True):
+    for agent_name, info in registry.items():
+        if not info.get("active", True):
             continue
+        # Skills und Description als Keywords nutzen
+        keywords: list[str] = []
+        for skill in info.get("skills", []):
+            keywords.append(skill.lower())
+        desc = info.get("description", "").lower()
+        # Einzelne signifikante Wörter aus der Description
+        keywords += [w for w in desc.split() if len(w) > 4]
+
         score = sum(1 for kw in keywords if kw in text_lower)
         if score > 0:
             scores[agent_name] = score
@@ -76,7 +63,6 @@ def _keyword_route(text: str, registry: dict) -> str | None:
         return None
 
     best = max(scores, key=lambda k: scores[k])
-    # Nur wenn klarer Vorsprung (mind. 2 Treffer, oder einziger Treffer)
     if scores[best] >= 2 or len(scores) == 1:
         return best
     return None
@@ -85,24 +71,24 @@ def _keyword_route(text: str, registry: dict) -> str | None:
 def route_task(text: str) -> tuple[str, bool]:
     """
     Wählt den passenden Agenten.
-    1. Keyword-Match (schnell, kein LLM-Call)
-    2. LLM-Fallback (wenn unklar)
-    3. Spawn-Request (wenn wirklich nichts passt)
 
     Returns:
         (agent_name, spawn_needed)
+
+    Raises:
+        RuntimeError("ATLAS_EMPTY_SWARM") wenn keine Agenten registriert sind.
     """
     registry, agent_list = _build_agent_list()
 
     if not registry:
-        return "plm_coordinator", False
+        raise RuntimeError("ATLAS_EMPTY_SWARM")
 
     # Schritt 1: Keyword-Routing (ohne LLM)
     keyword_match = _keyword_route(text, registry)
     if keyword_match:
         return keyword_match, False
 
-    # Schritt 2: LLM-Routing mit kompaktem Prompt
+    # Schritt 2: LLM-Routing
     prompt = f"""Du bist der ATLAS Swarm Dispatcher. Wähle den exakt passendsten Agenten.
 
 VERFÜGBARE AGENTEN:
@@ -112,7 +98,7 @@ AUFGABE:
 {text[:500]}
 
 Antworte NUR mit:
-- Dem EXAKTEN Agentennamen aus der Liste (kein Kommentar, kein Punkt)
+- Dem EXAKTEN Agentennamen aus der Liste
 - ODER: SPAWN_NEEDED: <eine Zeile Beschreibung des benötigten Agenten>
 
 Deine Antwort:"""
@@ -129,9 +115,10 @@ Deine Antwort:"""
             agent_name="router",
         ).strip()
     except Exception:
-        return "plm_coordinator", False
+        # Fallback: ersten aktiven Agenten nehmen
+        first = next(iter(registry))
+        return first, False
 
-    # Spawn-Anfrage
     if result.upper().startswith("SPAWN_NEEDED:"):
         description = result[len("SPAWN_NEEDED:"):].strip()
         pin_signal(
@@ -139,16 +126,16 @@ Deine Antwort:"""
             signal_type="spawn_request",
             content={"description": description, "trigger_input": text[:300]},
         )
-        return "plm_coordinator", True
+        first = next(iter(registry))
+        return first, True
 
-    # Bereinigen und validieren
     clean = result.strip().strip("'\"").split("\n")[0].strip()
     if clean in registry:
         return clean, False
 
-    # Fuzzy: enthält ein bekannter Name den Result-String?
     for name in registry:
         if name in clean.lower() or clean.lower() in name:
             return name, False
 
-    return "plm_coordinator", False
+    first = next(iter(registry))
+    return first, False
